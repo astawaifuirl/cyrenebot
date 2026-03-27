@@ -1,36 +1,77 @@
-# This is a basic workflow to help you get started with Actions
+name: AList Downloader Workflow
 
-name: CI
-
-# Controls when the workflow will run
+# 使用 workflow_dispatch 实现手动触发，并定义两个输入参数
 on:
-  # Triggers the workflow on push or pull request events but only for the "main" branch
-  push:
-    branches: [ "main" ]
-  pull_request:
-    branches: [ "main" ]
-
-  # Allows you to run this workflow manually from the Actions tab
   workflow_dispatch:
+    inputs:
+      script_url:
+        description: '一次性脚本的下载链接 (URL)'
+        required: true
+        type: string
+      target_folder:
+        description: '需要处理的 AList 目录名称 (例如: aaaa)'
+        required: true
+        type: string
 
-# A workflow run is made up of one or more jobs that can run sequentially or in parallel
 jobs:
-  # This workflow contains a single job called "build"
-  build:
-    # The type of runner that the job will run on
+  run-downloader:
     runs-on: ubuntu-latest
 
-    # Steps represent a sequence of tasks that will be executed as part of the job
     steps:
-      # Checks-out your repository under $GITHUB_WORKSPACE, so your job can access it
-      - uses: actions/checkout@v4
-
-      # Runs a single command using the runners shell
-      - name: Run a one-line script
-        run: echo Hello, world!
-
-      # Runs a set of commands using the runners shell
-      - name: Run a multi-line script
+      - name: 1. Install System Dependencies
         run: |
-          echo Add other actions to build,
-          echo test, and deploy your project.
+          sudo apt-get update
+          sudo apt-get install -y jq curl wget unzip
+
+      - name: 2. Install BaiduPCS-Go (Latest)
+        run: |
+          echo ">>> Fetching latest BaiduPCS-Go release..."
+          DOWNLOAD_URL=$(curl -s "https://api.github.com/repos/qjfoidnh/BaiduPCS-Go/releases/latest" | jq -r '.assets[] | select(.name | contains("linux-amd64.zip")) | .browser_download_url')
+          wget "$DOWNLOAD_URL" -O baidupcs.zip
+          unzip baidupcs.zip
+          # 自动寻找解压出来的可执行文件并移动到系统路径
+          find . -name "BaiduPCS-Go" -type f -exec sudo mv {} /usr/local/bin/ \;
+          sudo chmod +x /usr/local/bin/BaiduPCS-Go
+          BaiduPCS-Go -v
+
+      - name: 3. Install Aria2-Pro-Core (128 threads)
+        run: |
+          echo ">>> Fetching latest Aria2-Pro-Core release..."
+          DOWNLOAD_URL=$(curl -s "https://api.github.com/repos/P3TERX/Aria2-Pro-Core/releases/latest" | jq -r '.assets[] | select(.name | contains("linux-amd64.tar.gz")) | .browser_download_url')
+          wget "$DOWNLOAD_URL" -O aria2.tar.gz
+          tar -xzf aria2.tar.gz
+          sudo mv aria2c /usr/local/bin/
+          sudo chmod +x /usr/local/bin/aria2c
+          aria2c -v
+
+      - name: 4. Install RAR from rarlab
+        run: |
+          echo ">>> Fetching RAR for Linux x64..."
+          # 使用官方稳定的 7.01 版本
+          wget https://www.rarlab.com/rar/rarlinux-x64-701.tar.gz -O rarlinux.tar.gz
+          tar -xzf rarlinux.tar.gz
+          sudo mv rar/rar /usr/local/bin/
+          sudo chmod +x /usr/local/bin/rar
+          rar | head -n 2
+
+      - name: 5. Prepare ~/sfd.sh (IMPORTANT)
+        run: |
+          # 警告：GitHub Actions 是一台全新的虚拟机，默认没有你的 ~/sfd.sh 文件！
+          # 你需要在这里通过 curl 下载你的 sfd.sh，或者将密码/逻辑写进 GitHub Secrets。
+          # 下面这行只是生成一个临时占位脚本防止报错，你需要替换它！
+          echo '#!/bin/bash' > ~/sfd.sh
+          echo 'echo "[sfd.sh] 处理完毕: \$1"' >> ~/sfd.sh
+          chmod +x ~/sfd.sh
+
+      - name: 6. Fetch and Execute Main Script
+        run: |
+          echo ">>> 下载并执行一次性脚本..."
+          # 从你传入的参数获取脚本
+          curl -sL "${{ inputs.script_url }}" -o main_script.sh
+          
+          # 将函数 source 到当前的 bash 环境中
+          source main_script.sh
+          
+          # 提取传入的文件夹参数并执行函数
+          download_alist_dir "${{ inputs.target_folder }}"
+          
