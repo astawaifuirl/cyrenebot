@@ -1,77 +1,80 @@
-name: AList Downloader Workflow
+name: AList Auto Downloader
 
-# 使用 workflow_dispatch 实现手动触发，并定义两个输入参数
+# 触发条件：支持网页端手动填表单点击，也支持通过 API (curl/Discord Bot) 传参静默触发
 on:
   workflow_dispatch:
     inputs:
       script_url:
-        description: '一次性脚本的下载链接 (URL)'
+        description: 'VPS 主脚本分发地址 (例如: http://aaa.com:28084)'
         required: true
         type: string
+        default: 'http://aaa.com:28084'
       target_folder:
-        description: '需要处理的 AList 目录名称 (例如: aaaa)'
+        description: '需要处理的云端文件夹名称'
         required: true
         type: string
 
 jobs:
-  run-downloader:
+  process-files:
     runs-on: ubuntu-latest
-
+    
     steps:
-      - name: 1. Install System Dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y jq curl wget unzip
+      # ================== 1. 核心大扫除 (续命神技) ==================
+      - name: 🧹 Maximize Build Space (清理预装环境释放空间)
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: true
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          docker-images: true
+          swap-storage: false
 
-      - name: 2. Install BaiduPCS-Go (Latest)
+      # ================== 2. 查看战果 ==================
+      - name: 📊 Check current disk space (检查可用磁盘空间)
         run: |
-          echo ">>> Fetching latest BaiduPCS-Go release..."
-          DOWNLOAD_URL=$(curl -s "https://api.github.com/repos/qjfoidnh/BaiduPCS-Go/releases/latest" | jq -r '.assets[] | select(.name | contains("linux-amd64.zip")) | .browser_download_url')
-          wget "$DOWNLOAD_URL" -O baidupcs.zip
-          unzip baidupcs.zip
-          # 自动寻找解压出来的可执行文件并移动到系统路径
-          find . -name "BaiduPCS-Go" -type f -exec sudo mv {} /usr/local/bin/ \;
+          echo ">>> 磁盘大扫除完成！当前系统磁盘使用情况如下："
+          df -h
+
+      # ================== 3. 准备神兵利器 ==================
+      - name: ⚙️ Install Dependencies (安装基础依赖)
+        run: |
+          echo ">>> 正在安装 aria2, jq, rar, ncat..."
+          sudo apt-get update
+          sudo apt-get install -y aria2 jq rar ncat curl
+
+      # 因为你的脚本里用到了 BaiduPCS-Go 来计算秒传哈希，GitHub 默认是没有的，必须临时下载配置
+      - name: 🛠️ Setup BaiduPCS-Go (配置百度网盘命令行工具)
+        run: |
+          echo ">>> 正在拉取 BaiduPCS-Go..."
+          wget -q https://github.com/qjfoidnh/BaiduPCS-Go/releases/download/v3.9.5/BaiduPCS-Go-v3.9.5-linux-amd64.zip
+          unzip -q BaiduPCS-Go-v3.9.5-linux-amd64.zip
+          sudo mv BaiduPCS-Go-v3.9.5-linux-amd64/BaiduPCS-Go /usr/local/bin/
           sudo chmod +x /usr/local/bin/BaiduPCS-Go
+          echo ">>> BaiduPCS-Go 配置完成！版本信息："
           BaiduPCS-Go -v
 
-      - name: 3. Install Aria2-Pro-Core (128 threads)
+      # ================== 4. 点火发射 ==================
+      - name: 🚀 Execute Remote Main Script (执行云端流水线)
         run: |
-          echo ">>> Fetching latest Aria2-Pro-Core release..."
-          DOWNLOAD_URL=$(curl -s "https://api.github.com/repos/P3TERX/Aria2-Pro-Core/releases/latest" | jq -r '.assets[] | select(.name | contains("linux-amd64.tar.gz")) | .browser_download_url')
-          wget "$DOWNLOAD_URL" -O aria2.tar.gz
-          tar -xzf aria2.tar.gz
-          sudo mv aria2c /usr/local/bin/
-          sudo chmod +x /usr/local/bin/aria2c
-          aria2c -v
-
-      - name: 4. Install RAR from rarlab
-        run: |
-          echo ">>> Fetching RAR for Linux x64..."
-          # 使用官方稳定的 7.01 版本
-          wget https://www.rarlab.com/rar/rarlinux-x64-701.tar.gz -O rarlinux.tar.gz
-          tar -xzf rarlinux.tar.gz
-          sudo mv rar/rar /usr/local/bin/
-          sudo chmod +x /usr/local/bin/rar
-          rar | head -n 2
-
-      - name: 5. Prepare ~/sfd.sh (IMPORTANT)
-        run: |
-          # 警告：GitHub Actions 是一台全新的虚拟机，默认没有你的 ~/sfd.sh 文件！
-          # 你需要在这里通过 curl 下载你的 sfd.sh，或者将密码/逻辑写进 GitHub Secrets。
-          # 下面这行只是生成一个临时占位脚本防止报错，你需要替换它！
-          echo '#!/bin/bash' > ~/sfd.sh
-          echo 'echo "[sfd.sh] 处理完毕: \$1"' >> ~/sfd.sh
-          chmod +x ~/sfd.sh
-
-      - name: 6. Fetch and Execute Main Script
-        run: |
-          echo ">>> 下载并执行一次性脚本..."
-          # 从你传入的参数获取脚本
+          echo "======================================================="
+          echo ">>> 目标文件夹: ${{ inputs.target_folder }}"
+          echo ">>> 脚本源地址: ${{ inputs.script_url }}"
+          echo "======================================================="
+          
+          echo ">>> [1/2] 正在从 VPS 拉取主脚本..."
           curl -sL "${{ inputs.script_url }}" -o main_script.sh
           
-          # 将函数 source 到当前的 bash 环境中
+          # 安全校验：防止 VPS 防火墙拦截导致下载了空文件
+          if [ ! -s main_script.sh ]; then
+            echo "❌ 严重错误: 脚本下载失败或为空文件！请检查 VPS 的 28084 端口是否放行。"
+            exit 1
+          fi
+          
+          chmod +x main_script.sh
+          echo ">>> [2/2] 主脚本拉取成功，开始载入并执行核心逻辑..."
+          
+          # 使用 source 加载脚本，并调用里面封装好的 download_alist_dir 函数
           source main_script.sh
-          
-          # 提取传入的文件夹参数并执行函数
           download_alist_dir "${{ inputs.target_folder }}"
-          
