@@ -20,6 +20,7 @@ jobs:
     steps:
       # ================== 1. 核心大扫除 (续命神技) ==================
       - name: 🧹 Maximize Build Space (清理预装环境释放空间)
+        if: false
         uses: jlumbroso/free-disk-space@main
         with:
           tool-cache: true
